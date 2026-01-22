@@ -6,7 +6,7 @@
 
 This contains everything you need to run your app locally.
 
-You can view this app in AI Studio: https://ai.studio/apps/drive/1P2o80tPmTtiuelAHSvCVdCIjBb724jXn
+You can view this app in AI Studio: https://linkedin-proflie-linkerpro-437163342398.us-west1.run.app
 
 ## Run Locally
 
