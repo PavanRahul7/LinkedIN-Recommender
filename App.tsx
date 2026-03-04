@@ -3,8 +3,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import { HashRouter as Router } from 'react-router-dom';
 import { Profile, EnrichmentProgress, ColumnMapping, FieldType } from './types';
 import { parseRawCSV, detectMappings, finalizeProfiles, parseEnrichedCSV, exportToCSV, exportToJSON, downloadXLSX, downloadFile } from './services/csv';
-import { enrichWithGemini, inferFromTitle, identifyRole, recommendProfiles } from './services/gemini';
+import { enrichWithGemini, inferFromTitle, identifyRole, recommendProfiles, getGlobalInsights, getSuggestedConnections } from './services/gemini';
 import ProfileCard from './components/ProfileCard';
+import Markdown from 'react-markdown';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -93,6 +94,30 @@ function UploadPage({
             <p className="text-slate-500 mt-2 text-sm font-light">Load previously processed .json or .csv</p>
           </div>
           <input type="file" ref={restoreInputRef} className="hidden" accept=".json,.csv" onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0], true)} />
+        </div>
+      </div>
+
+      {/* HOW IT WORKS */}
+      <div className="mt-24 w-full max-w-5xl">
+        <div className="text-center mb-12">
+          <h2 className="text-2xl font-black text-slate-100 uppercase tracking-[0.3em]">How it works</h2>
+          <div className="h-1 w-20 bg-blue-600 mx-auto mt-4 rounded-full"></div>
+        </div>
+        
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+          {[
+            { step: '01', title: 'Upload', desc: 'Drop your raw CSV attendee list (including LinkedIn URLs).', icon: '📄' },
+            { step: '02', title: 'Map', desc: 'Match columns to data fields like Name and LinkedIn URL.', icon: '🗺️' },
+            { step: '03', title: 'Enrich', desc: 'AI discovers roles & backgrounds from profiles.', icon: '🧠' },
+            { step: '04', title: 'Analyze', desc: 'Get insights & personalized connections.', icon: '📈' },
+          ].map((item, idx) => (
+            <div key={idx} className="bg-slate-900/40 border border-slate-800 p-8 rounded-[2rem] relative group hover:border-blue-500/30 transition-all">
+              <span className="absolute top-6 right-8 text-4xl opacity-20 group-hover:opacity-40 transition-opacity">{item.icon}</span>
+              <div className="text-blue-500 font-black text-sm mb-4 tracking-widest">{item.step}</div>
+              <h3 className="text-xl font-bold text-slate-100 mb-2">{item.title}</h3>
+              <p className="text-slate-500 text-sm font-light leading-relaxed">{item.desc}</p>
+            </div>
+          ))}
         </div>
       </div>
     </div>
@@ -417,14 +442,51 @@ function ProgressPage({ profiles, onComplete }: { profiles: Profile[], onComplet
   );
 }
 
-function ResultsPage({ profiles }: { profiles: Profile[] }) {
+function ResultsPage({ profiles: initialProfiles }: { profiles: Profile[] }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [isAgentThinking, setIsAgentThinking] = useState(false);
-  const [results, setResults] = useState(profiles);
+  const [profiles, setProfiles] = useState(initialProfiles);
+  const [results, setResults] = useState(initialProfiles);
   const [selectedRegion, setSelectedRegion] = useState('All Regions');
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [activeTab, setActiveTab] = useState<'profiles' | 'insights'>('profiles');
+  const [globalInsights, setGlobalInsights] = useState<string | null>(null);
+  const [isGeneratingInsights, setIsGeneratingInsights] = useState(false);
 
   const regions = ['All Regions', ...Array.from(new Set(profiles.map(p => p.region).filter(Boolean))) as string[]];
+
+  const generateInsights = async () => {
+    if (globalInsights || isGeneratingInsights) return;
+    setIsGeneratingInsights(true);
+    try {
+      const insights = await getGlobalInsights(profiles);
+      setGlobalInsights(insights);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsGeneratingInsights(false);
+    }
+  };
+
+  const handleSuggestConnections = async (profileId: string) => {
+    const target = profiles.find(p => p.id === profileId);
+    if (!target || target.suggested_connections) return;
+
+    // Set loading state for this profile
+    setProfiles(prev => prev.map(p => p.id === profileId ? { ...p, enrichment_status: 'processing' } : p));
+    
+    try {
+      const suggestions = await getSuggestedConnections(target, profiles);
+      setProfiles(prev => prev.map(p => p.id === profileId ? { 
+        ...p, 
+        suggested_connections: suggestions,
+        enrichment_status: 'success' 
+      } : p));
+    } catch (e) {
+      console.error(e);
+      setProfiles(prev => prev.map(p => p.id === profileId ? { ...p, enrichment_status: 'error' } : p));
+    }
+  };
 
   const handleAgentSearch = async () => {
     const q = searchQuery.toLowerCase().trim();
@@ -476,11 +538,13 @@ function ResultsPage({ profiles }: { profiles: Profile[] }) {
 
   useEffect(() => {
     handleAgentSearch();
-  }, [selectedRegion]);
+  }, [selectedRegion, profiles]);
 
   useEffect(() => {
-    setResults(profiles);
-  }, [profiles]);
+    if (activeTab === 'insights') {
+      generateInsights();
+    }
+  }, [activeTab]);
 
   return (
     <div className="max-w-6xl mx-auto py-12 px-4 animate-fadeIn">
@@ -489,80 +553,139 @@ function ResultsPage({ profiles }: { profiles: Profile[] }) {
           <h2 className="text-4xl font-black text-slate-50 tracking-tight">Intelligence Dashboard</h2>
           <p className="text-slate-500 font-light mt-1">Found {results.length} matching insights.</p>
         </div>
-        <div className="relative">
-          <button 
-            onClick={() => {
-              if (profiles.length === 0) return;
-              setShowExportMenu(!showExportMenu);
-            }}
-            className="bg-blue-600 text-white px-8 py-4 rounded-2xl font-bold hover:bg-blue-500 transition-all flex items-center gap-2 shadow-lg shadow-blue-500/20"
-          >
-             <span>📤</span> Export Enriched Data
-          </button>
-          {showExportMenu && (
-            <div className="absolute right-0 mt-2 w-48 bg-[#0f172a] border border-slate-800 rounded-xl shadow-2xl overflow-hidden z-[100]">
-              <button 
-                onClick={() => { downloadFile(exportToCSV(profiles), 'profiles.csv', 'text/csv'); setShowExportMenu(false); }}
-                className="w-full text-left px-4 py-3 text-sm text-slate-300 hover:bg-slate-800 hover:text-white transition-colors border-b border-slate-800/50"
-              >Export as CSV</button>
-              <button 
-                onClick={() => { downloadFile(exportToJSON(profiles), 'profiles.json', 'application/json'); setShowExportMenu(false); }}
-                className="w-full text-left px-4 py-3 text-sm text-slate-300 hover:bg-slate-800 hover:text-white transition-colors border-b border-slate-800/50"
-              >Export as JSON (Full session)</button>
-              <button 
-                onClick={() => { downloadXLSX(profiles, 'profiles.xlsx'); setShowExportMenu(false); }}
-                className="w-full text-left px-4 py-3 text-sm text-slate-300 hover:bg-slate-800 hover:text-white transition-colors"
-              >Export as XLSX</button>
-            </div>
-          )}
+        <div className="flex items-center gap-4">
+          <div className="bg-slate-900/50 p-1.5 rounded-2xl border border-slate-800 flex gap-2">
+            <button 
+              onClick={() => setActiveTab('profiles')}
+              className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all ${activeTab === 'profiles' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'text-slate-400 hover:text-slate-200'}`}
+            >
+              Profiles
+            </button>
+            <button 
+              onClick={() => setActiveTab('insights')}
+              className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all ${activeTab === 'insights' ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' : 'text-slate-400 hover:text-slate-200'}`}
+            >
+              Group Insights
+            </button>
+          </div>
+          <div className="relative">
+            <button 
+              onClick={() => {
+                if (profiles.length === 0) return;
+                setShowExportMenu(!showExportMenu);
+              }}
+              className="bg-slate-800 text-white px-6 py-3.5 rounded-2xl font-bold hover:bg-slate-700 transition-all flex items-center gap-2 border border-slate-700"
+            >
+               <span>📤</span> Export
+            </button>
+            {showExportMenu && (
+              <div className="absolute right-0 mt-2 w-48 bg-[#0f172a] border border-slate-800 rounded-xl shadow-2xl overflow-hidden z-[100]">
+                <button 
+                  onClick={() => { downloadFile(exportToCSV(profiles), 'profiles.csv', 'text/csv'); setShowExportMenu(false); }}
+                  className="w-full text-left px-4 py-3 text-sm text-slate-300 hover:bg-slate-800 hover:text-white transition-colors border-b border-slate-800/50"
+                >Export as CSV</button>
+                <button 
+                  onClick={() => { downloadFile(exportToJSON(profiles), 'profiles.json', 'application/json'); setShowExportMenu(false); }}
+                  className="w-full text-left px-4 py-3 text-sm text-slate-300 hover:bg-slate-800 hover:text-white transition-colors border-b border-slate-800/50"
+                >Export as JSON</button>
+                <button 
+                  onClick={() => { downloadXLSX(profiles, 'profiles.xlsx'); setShowExportMenu(false); }}
+                  className="w-full text-left px-4 py-3 text-sm text-slate-300 hover:bg-slate-800 hover:text-white transition-colors"
+                >Export as XLSX</button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
       
-      <div className="flex flex-col md:flex-row gap-4 mb-16">
-        <div className="relative flex-1">
-          <div className="absolute inset-y-0 left-6 flex items-center pointer-events-none">
-            {isAgentThinking ? (
-              <div className="animate-spin text-2xl">🧠</div>
-            ) : (
-              <span className="text-2xl">⚡</span>
-            )}
+      {activeTab === 'profiles' ? (
+        <>
+          <div className="flex flex-col md:flex-row gap-4 mb-16">
+            <div className="relative flex-1">
+              <div className="absolute inset-y-0 left-6 flex items-center pointer-events-none">
+                {isAgentThinking ? (
+                  <div className="animate-spin text-2xl">🧠</div>
+                ) : (
+                  <span className="text-2xl">⚡</span>
+                )}
+              </div>
+              <input 
+                type="text" 
+                placeholder="Ask the Networking Agent: 'Find founders with 5+ years of experience in climate tech'..." 
+                className={`w-full bg-slate-900 border ${isAgentThinking ? 'border-blue-500 ring-2 ring-blue-500/20' : 'border-slate-800'} rounded-3xl pl-16 pr-40 py-8 text-lg text-slate-100 focus:border-blue-500 outline-none shadow-2xl transition-all placeholder:text-slate-600 font-medium`} 
+                value={searchQuery} 
+                onChange={(e) => setSearchQuery(e.target.value)} 
+                onKeyDown={(e) => e.key === 'Enter' && handleAgentSearch()} 
+              />
+              <button 
+                onClick={handleAgentSearch} 
+                disabled={isAgentThinking}
+                className="absolute right-6 top-4 bottom-4 bg-blue-600 disabled:bg-slate-800 px-10 rounded-2xl text-white font-black hover:bg-blue-500 transition-all shadow-lg active:scale-95 flex items-center gap-2"
+              >
+                {isAgentThinking ? 'Analyzing...' : 'Ask Agent'}
+              </button>
+            </div>
+
+            <div className="md:w-64">
+              <select 
+                value={selectedRegion}
+                onChange={(e) => setSelectedRegion(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-800 rounded-3xl px-6 py-8 text-slate-300 focus:border-blue-500 outline-none appearance-none cursor-pointer font-bold h-full shadow-2xl"
+                style={{ backgroundImage: 'url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'currentColor\' stroke-width=\'2\' stroke-linecap=\'round\' stroke-linejoin=\'round\'%3e%3cpolyline points=\'6 9 12 15 18 9\'%3e%3c/polyline%3e%3c/svg%3e")', backgroundRepeat: 'no-repeat', backgroundPosition: 'right 1.5rem center', backgroundSize: '1.2em' }}
+              >
+                {regions.map(r => <option key={r} value={r}>{r}</option>)}
+              </select>
+            </div>
           </div>
-          <input 
-            type="text" 
-            placeholder="Ask the Networking Agent: 'Find founders with 5+ years of experience in climate tech'..." 
-            className={`w-full bg-slate-900 border ${isAgentThinking ? 'border-blue-500 ring-2 ring-blue-500/20' : 'border-slate-800'} rounded-3xl pl-16 pr-40 py-8 text-lg text-slate-100 focus:border-blue-500 outline-none shadow-2xl transition-all placeholder:text-slate-600 font-medium`} 
-            value={searchQuery} 
-            onChange={(e) => setSearchQuery(e.target.value)} 
-            onKeyDown={(e) => e.key === 'Enter' && handleAgentSearch()} 
-          />
-          <button 
-            onClick={handleAgentSearch} 
-            disabled={isAgentThinking}
-            className="absolute right-6 top-4 bottom-4 bg-blue-600 disabled:bg-slate-800 px-10 rounded-2xl text-white font-black hover:bg-blue-500 transition-all shadow-lg active:scale-95 flex items-center gap-2"
-          >
-            {isAgentThinking ? 'Analyzing...' : 'Ask Agent'}
-          </button>
-        </div>
 
-        <div className="md:w-64">
-          <select 
-            value={selectedRegion}
-            onChange={(e) => setSelectedRegion(e.target.value)}
-            className="w-full bg-slate-900 border border-slate-800 rounded-3xl px-6 py-8 text-slate-300 focus:border-blue-500 outline-none appearance-none cursor-pointer font-bold h-full shadow-2xl"
-            style={{ backgroundImage: 'url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'currentColor\' stroke-width=\'2\' stroke-linecap=\'round\' stroke-linejoin=\'round\'%3e%3cpolyline points=\'6 9 12 15 18 9\'%3e%3c/polyline%3e%3c/svg%3e")', backgroundRepeat: 'no-repeat', backgroundPosition: 'right 1.5rem center', backgroundSize: '1.2em' }}
-          >
-            {regions.map(r => <option key={r} value={r}>{r}</option>)}
-          </select>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {results.map(p => <ProfileCard key={p.id} profile={p} />)}
-      </div>
-      {results.length === 0 && (
-        <div className="text-center py-20 bg-slate-900/40 rounded-3xl border border-slate-800 border-dashed">
-          <div className="text-5xl mb-4 opacity-30">🕵️‍♂️</div>
-          <p className="text-slate-500 text-xl font-light">No matches found for your criteria.</p>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            {results.map(p => (
+              <ProfileCard 
+                key={p.id} 
+                profile={p} 
+                onSuggestConnections={() => handleSuggestConnections(p.id)}
+                allProfiles={profiles}
+              />
+            ))}
+          </div>
+          {results.length === 0 && (
+            <div className="text-center py-20 bg-slate-900/40 rounded-3xl border border-slate-800 border-dashed">
+              <div className="text-5xl mb-4 opacity-30">🕵️‍♂️</div>
+              <p className="text-slate-500 text-xl font-light">No matches found for your criteria.</p>
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="bg-slate-900/40 border border-slate-800 rounded-[2.5rem] p-12 shadow-2xl min-h-[500px]">
+          {isGeneratingInsights ? (
+            <div className="flex flex-col items-center justify-center h-full py-20">
+              <div className="animate-spin text-6xl mb-8">🧠</div>
+              <h3 className="text-2xl font-black text-slate-100 mb-2">Synthesizing Group Intelligence</h3>
+              <p className="text-slate-500 italic">Analyzing profiles to find hidden patterns and opportunities...</p>
+            </div>
+          ) : globalInsights ? (
+            <div className="animate-fadeIn">
+              <div className="flex items-center gap-4 mb-8">
+                <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center text-2xl shadow-lg shadow-blue-500/20">💡</div>
+                <h3 className="text-3xl font-black text-slate-50 tracking-tight">Group Intelligence Report</h3>
+              </div>
+              <div className="markdown-body prose prose-invert max-w-none prose-slate prose-headings:text-slate-50 prose-p:text-slate-300 prose-li:text-slate-300 prose-strong:text-blue-400">
+                <Markdown>{globalInsights}</Markdown>
+              </div>
+              <div className="mt-12 pt-8 border-t border-slate-800 flex justify-between items-center">
+                <p className="text-xs text-slate-600 uppercase font-black tracking-widest">Generated by Gemini 3 Flash</p>
+                <button 
+                  onClick={() => { setGlobalInsights(null); generateInsights(); }}
+                  className="text-blue-500 text-xs font-bold hover:text-blue-400 transition-colors"
+                >Regenerate Insights</button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center h-full py-20">
+              <p className="text-slate-500">Failed to load insights.</p>
+              <button onClick={generateInsights} className="mt-4 text-blue-500 font-bold">Try Again</button>
+            </div>
+          )}
         </div>
       )}
     </div>

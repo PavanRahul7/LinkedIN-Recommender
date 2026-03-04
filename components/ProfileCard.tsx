@@ -4,9 +4,11 @@ import { Profile } from '../types';
 
 interface ProfileCardProps {
   profile: Profile;
+  onSuggestConnections?: () => void;
+  allProfiles?: Profile[];
 }
 
-const ProfileCard: React.FC<ProfileCardProps> = ({ profile }) => {
+const ProfileCard: React.FC<ProfileCardProps> = ({ profile, onSuggestConnections, allProfiles }) => {
   const getCleanUrl = (url?: string) => {
     if (!url) return '';
     let clean = url.trim().replace(/^["']|["']$/g, '');
@@ -24,6 +26,11 @@ const ProfileCard: React.FC<ProfileCardProps> = ({ profile }) => {
           <div className="flex items-center gap-3 flex-wrap">
             <h3 className="text-xl font-bold text-slate-50 flex items-center gap-2 group-hover:text-blue-400 transition-colors truncate">
               <span className="text-2xl">👤</span> {profile.name}
+              {linkedinUrl && (
+                <a href={linkedinUrl} target="_blank" rel="noopener noreferrer" className="text-[#0A66C2] hover:scale-110 transition-transform">
+                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M19 0h-14c-2.761 0-5 2.239-5 5v14c0 2.761 2.239 5 5 5h14c2.761 0 5-2.239 5-5v-14c0-2.761-2.239-5-5-5zm-11 19h-3v-11h3v11zm-1.5-12.268c-.966 0-1.75-.79-1.75-1.764s.784-1.764 1.75-1.764 1.75.79 1.75 1.764-.783 1.764-1.75 1.764zm13.5 12.268h-3v-5.604c0-3.368-4-3.113-4 0v5.604h-3v-11h3v1.765c1.396-2.586 7-2.777 7 2.476v6.759z"/></svg>
+                </a>
+              )}
             </h3>
             {profile.years_of_experience && (
               <span className="bg-blue-500/20 text-blue-300 text-[10px] px-2 py-0.5 rounded-md border border-blue-500/30 font-black whitespace-nowrap">
@@ -100,6 +107,29 @@ const ProfileCard: React.FC<ProfileCardProps> = ({ profile }) => {
         </div>
       )}
 
+      {profile.suggested_connections && profile.suggested_connections.length > 0 && (
+        <div className="mb-4 bg-slate-950/40 border border-slate-800 rounded-xl p-4">
+          <h4 className="text-[10px] font-black text-blue-500 uppercase tracking-[0.2em] mb-3 flex items-center gap-2">
+            <span>🤝</span> People You Should Meet
+          </h4>
+          <div className="space-y-3">
+            {profile.suggested_connections.map((suggestion, i) => {
+              const person = allProfiles?.find(p => p.id === suggestion.id);
+              if (!person) return null;
+              return (
+                <div key={i} className="flex flex-col gap-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-200">{person.name}</span>
+                    <span className="text-[10px] text-slate-500 italic truncate max-w-[150px]">{person.title}</span>
+                  </div>
+                  <p className="text-[10px] text-slate-400 leading-tight">{suggestion.reason}</p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div className="mt-6 flex flex-wrap items-center gap-4 pt-4 border-t border-slate-800/60">
         {linkedinUrl && (
           <a 
@@ -111,6 +141,16 @@ const ProfileCard: React.FC<ProfileCardProps> = ({ profile }) => {
             <svg className="w-4 h-4 mr-1.5" fill="currentColor" viewBox="0 0 24 24"><path d="M19 0h-14c-2.761 0-5 2.239-5 5v14c0 2.761 2.239 5 5 5h14c2.761 0 5-2.239 5-5v-14c0-2.761-2.239-5-5-5zm-11 19h-3v-11h3v11zm-1.5-12.268c-.966 0-1.75-.79-1.75-1.764s.784-1.764 1.75-1.764 1.75.79 1.75 1.764-.783 1.764-1.75 1.764zm13.5 12.268h-3v-5.604c0-3.368-4-3.113-4 0v5.604h-3v-11h3v1.765c1.396-2.586 7-2.777 7 2.476v6.759z"/></svg>
             Connect
           </a>
+        )}
+
+        {!profile.suggested_connections && onSuggestConnections && (
+          <button 
+            onClick={onSuggestConnections}
+            disabled={profile.enrichment_status === 'processing'}
+            className="text-[10px] font-black uppercase tracking-widest text-blue-500 hover:text-blue-400 transition-colors disabled:opacity-50"
+          >
+            {profile.enrichment_status === 'processing' ? 'Thinking...' : 'Suggest Connections'}
+          </button>
         )}
 
         {profile.grounding_urls && profile.grounding_urls.length > 0 && (

@@ -167,6 +167,96 @@ export async function enrichWithGemini(
   }
 }
 
+export async function getGlobalInsights(profiles: Profile[]): Promise<string> {
+  const context = profiles.map(p => ({
+    name: p.name,
+    title: p.title,
+    company: p.company,
+    skills: p.skills || [],
+    background: p.background
+  }));
+
+  const prompt = `
+    Analyze this group of professional profiles and provide 3-4 high-level networking insights.
+    Focus on:
+    1. Common themes or industries.
+    2. Unique strengths of the group.
+    3. Potential collaboration opportunities.
+    4. A "vibe" summary of the group.
+
+    PROFILES:
+    ${JSON.stringify(context.slice(0, 50), null, 2)}
+
+    Return the response in clean Markdown. Use bullet points.
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: prompt,
+    });
+    return response.text || "No insights available.";
+  } catch (error) {
+    console.error("Global Insights Error:", error);
+    return "Failed to generate insights.";
+  }
+}
+
+export async function getSuggestedConnections(
+  targetProfile: Profile,
+  allProfiles: Profile[]
+): Promise<Array<{ id: string, reason: string }>> {
+  const others = allProfiles.filter(p => p.id !== targetProfile.id);
+  const context = others.map(p => ({
+    id: p.id,
+    name: p.name,
+    title: p.title,
+    company: p.company,
+    skills: p.skills || []
+  }));
+
+  const prompt = `
+    You are a networking matchmaker. Suggest 3 people from the list that ${targetProfile.name} (${targetProfile.title} at ${targetProfile.company}) should connect with.
+    
+    Target Profile Skills: ${(targetProfile.skills || []).join(', ')}
+    Target Profile Background: ${targetProfile.background}
+
+    POTENTIAL CONNECTIONS:
+    ${JSON.stringify(context.slice(0, 30), null, 2)}
+
+    For each suggestion, provide:
+    1. The "id"
+    2. A "reason" (max 12 words) focusing on synergy or shared interests.
+
+    Return a JSON array of objects.
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              id: { type: Type.STRING },
+              reason: { type: Type.STRING }
+            },
+            required: ["id", "reason"]
+          }
+        }
+      }
+    });
+    return JSON.parse(response.text.trim());
+  } catch (error) {
+    console.error("Connection Suggestions Error:", error);
+    return [];
+  }
+}
+
 export async function inferFromTitle(title: string, company: string): Promise<FallbackResult> {
   if (!title && !company) {
     return { typical_responsibilities: "Information unavailable.", typical_skills: ["Professional"] };

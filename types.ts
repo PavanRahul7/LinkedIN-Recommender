@@ -34,6 +34,7 @@ export interface Profile {
   // Agent Recommendation data
   match_reason?: string;
   score?: number;
+  suggested_connections?: Array<{ id: string, reason: string }>;
   
   // Metadata
   enrichment_status: 'pending' | 'processing' | 'success' | 'fallback' | 'error';
